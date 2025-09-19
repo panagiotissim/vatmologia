@@ -112,7 +112,7 @@
       <div id="pegTags" style="margin-top:6px"></div>
       <div class="table-wrap" id="drawTableWrap" style="margin-top:8px"></div>
       <div class="small muted" style="margin-top:6px">
-        Κλειστή 5άδα: προσπάθεια τοποθέτησης σε διαφορετικούς τομείς. Αν δεν είναι πολλαπλάσιο του 5, ο Ε είναι «τεχνικός» και δανείζεται ουραγούς του D
+        Κλειστή 5άδα: προσπάθεια τοποθέτησης σε διαφορετικούς τομείς. Αν δεν είναι πολλαπλάσιο του 5, ο Ε είναι «τεχνικός» και δανείζεται ουραγούς του Δ
         μόνο για την εσωτερική κατάταξη του Ε.
       </div>
     </div>
@@ -433,7 +433,7 @@ function scoreDay(dayId){
     bySec.get(dd.sector).push({id:a.id,name:a.name,club:a.club,sector:dd.sector,peg:dd.peg,weight:r.weight||0,biggest:r.biggest||0,count:r.count||0});
   });
 
-  // Τεχνικός Ε: δανείζεται ουραγούς D (για να έχει πλήρες per)
+  // Τεχνικός Ε: δανείζεται ουραγούς Δ αν χρειάζεται
   var E = bySec.get("E"), D = bySec.get("D");
   if(E && D && E.length < per){
     var need = per - E.length;
@@ -532,61 +532,70 @@ function teamScoreAggregate(){
   return rows;
 }
 
-/* ---------- Κλήρωση με συνεχόμενες θέσεις 1..N (χωρίς κενά) ---------- */
+/* ---------- Κλήρωση (Α–Δ ίσος αριθμός, Ε μπορεί λιγότερους) ---------- */
 function doDrawForDay(d){
   var sectors = state.settings.sectors; // ["A","B","C","D","E"]
   var N = state.athletes.length;
 
-  // Κάδοι τοποθέτησης βάσει κανόνων
-  var clubInSector = new Map(sectors.map(function(s){ return [s, new Set()]; }));
-  var buckets = new Map(sectors.map(function(s){ return [s, []]; }));
-  var sectorCap = new Map(sectors.map(function(s){ return [s,0]; }));
+  // Ισοκατανομή: Α–Δ ίδιο cap, Ε χαμηλότερο cap
+  var capAD = Math.ceil(N/5);
+  var capE  = Math.floor(N/5);
+  var capacity = new Map([
+    ["A", capAD], ["B", capAD], ["C", capAD], ["D", capAD], ["E", capE]
+  ]);
 
-  // Κλειστή 5άδα
+  // Κάδοι & tracking συλλόγων/πληρότητας
+  var buckets = new Map(sectors.map(function(s){ return [s, []]; }));
+  var clubInSector = new Map(sectors.map(function(s){ return [s, new Set()]; }));
+  var fillCount = new Map(sectors.map(function(s){ return [s,0]; }));
+
+  function hasRoom(sec){ return fillCount.get(sec) < capacity.get(sec); }
+  function placeIn(sec, a){
+    if(!hasRoom(sec)) return false;
+    buckets.get(sec).push(a.id);
+    fillCount.set(sec, fillCount.get(sec)+1);
+    clubInSector.get(sec).add((a.club||"-").trim());
+    return true;
+  }
+
+  // Κλειστή 5άδα (ανά σύλλογο) — διαφορετικοί τομείς, σεβασμός capacity
   var rosterSet = new Set();
   Object.values(state.teamRosters).forEach(function(arr){ (arr||[]).slice(0,5).forEach(function(id){ rosterSet.add(id); }); });
-
   var rosterAthletes = state.athletes.filter(function(a){ return rosterSet.has(a.id); });
   var otherAthletes  = state.athletes.filter(function(a){ return !rosterSet.has(a.id); });
   shuffle(rosterAthletes); shuffle(otherAthletes);
 
   var violations=0;
-  function placeIn(sec, a){
-    buckets.get(sec).push(a.id);
-    sectorCap.set(sec, sectorCap.get(sec)+1);
-    var c=(a.club||"-").trim();
-    clubInSector.get(sec).add(c);
-  }
 
-  // 1) Κλειστή 5άδα: αυστηρά διαφορετικοί τομείς & αποφυγή ίδιου συλλόγου
   rosterAthletes.forEach(function(a){
     var c=(a.club||"-").trim();
-    var choices = sectors.filter(function(s){ return !clubInSector.get(s).has(c); });
-    var pickFrom = choices.length? choices : sectors.slice();
-    var sorted = pickFrom.slice().sort(function(s1,s2){ return sectorCap.get(s1)-sectorCap.get(s2); });
-    var sec = sorted[0];
+    var choices = sectors.filter(function(s){ return hasRoom(s) && !clubInSector.get(s).has(c); });
+    var fallback = sectors.filter(function(s){ return hasRoom(s); });
+    var pickFrom = choices.length? choices : fallback;
+    if(pickFrom.length===0){ violations++; return; }
+    var sec = pickFrom.slice().sort(function(s1,s2){ return fillCount.get(s1)-fillCount.get(s2); })[0];
     if(!choices.length) violations++;
     placeIn(sec, a);
   });
 
-  // 2) Υπόλοιποι: προτίμηση σε τομέα όπου δεν υπάρχει ο σύλλογος
+  // Υπόλοιποι — αποφυγή ίδιου συλλόγου αν γίνεται, αλλιώς στον πιο άδειο με διαθέσιμο cap
   otherAthletes.forEach(function(a){
     var c=(a.club||"-").trim();
-    var preferred = sectors.filter(function(s){ return !clubInSector.get(s).has(c); });
-    var pickFrom = preferred.length? preferred : sectors.slice();
-    var sorted = pickFrom.slice().sort(function(s1,s2){ return sectorCap.get(s1)-sectorCap.get(s2); });
-    var sec = sorted[0];
+    var preferred = sectors.filter(function(s){ return hasRoom(s) && !clubInSector.get(s).has(c); });
+    var pickFrom = preferred.length? preferred : sectors.filter(function(s){ return hasRoom(s); });
+    if(pickFrom.length===0) return;
+    var sec = pickFrom.slice().sort(function(s1,s2){ return fillCount.get(s1)-fillCount.get(s2); })[0];
     placeIn(sec, a);
   });
 
-  // 3) Ανάθεση θέσεων 1..N χωρίς κενά — αθροιστικά ανά τομέα
+  // Θέσεις 1..N χωρίς κενά — αθροιστικά κατά τομέα
   d.draw = {};
   var start=1;
   sectors.forEach(function(sec){
     var list=buckets.get(sec)||[];
     var cnt=list.length;
     var localPegs = [];
-    for(var k=0;k<cnt;k++){ localPegs.push(start + k); }
+    for(var k=0;k<cnt;k++) localPegs.push(start + k);
     shuffle(localPegs);
     list.forEach(function(athId,i){
       d.draw[athId] = {sector:sec, peg: localPegs[i]};
@@ -595,8 +604,11 @@ function doDrawForDay(d){
   });
 
   if(violations>0){
-    alert("Προειδοποίηση: Δεν ήταν εφικτός ο πλήρης διαχωρισμός μελών κλειστής 5άδας σε διαφορετικούς τομείς ("+violations+" περιπτώσεις).");
+    alert("Προειδοποίηση: Περιορισμοί χωρητικότητας/διαχωρισμού 5άδας δεν τηρήθηκαν πλήρως σε "+violations+" περίπτωση/εις.");
   }
+
+  // Ανανέωση UI tags για τα πραγματικά ranges
+  renderPegTags();
 }
 
 /* ---------- Βαθμολογίες & Αναφορές (UI) ---------- */
