@@ -35,16 +35,13 @@
   table{width:100%;border-collapse:collapse;margin-top:8px}
   th,td{border-bottom:1px solid var(--line);padding:8px;text-align:left;white-space:nowrap}
   th{font-size:12px;color:var(--muted);font-weight:600}
-  /* Scrollable tables on mobile */
   .table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
   .table-wrap table{min-width:720px}
-  /* Εκτύπωση μόνο κλήρωσης */
   @media print {
     body.print-draw .card:not(.draw-section){ display:none !important; }
     body.print-draw header, body.print-draw nav{display:none}
     body.print-draw .draw-section{ border:none; box-shadow:none }
   }
-  /* Mobile stacks */
   @media (max-width:900px){ .row{flex-direction:column} }
 </style>
 </head>
@@ -171,90 +168,109 @@
 </div>
 
 <script>
+/* ==== Polyfills & safe utils ==== */
+(function(){
+  if (!String.prototype.replaceAll) {
+    String.prototype.replaceAll = function(find, replace) { return this.split(find).join(replace); };
+  }
+})();
+function safeEscapeHtml(s){
+  s = String(s == null ? "" : s);
+  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+function safeSanitize(s){
+  s = String(s == null ? "" : s);
+  return s.replace(/[^a-zA-Z0-9\\-_. ]+/g,"").replace(/ /g,"_");
+}
+function getInitialPage(){
+  return (window.location && window.location.hash) ? window.location.hash.slice(1) : "p-participants";
+}
+
 /* ---------- PWA register ---------- */
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("./service-worker.js").catch(()=>{});
+  navigator.serviceWorker.register("./service-worker.js").catch(function(){});
 }
 
 /* ---------- State ---------- */
-const $ = (id) => document.getElementById(id);
-const uid = () => Math.random().toString(36).slice(2,9);
+function $(id){ return document.getElementById(id); }
+function uid(){ return Math.random().toString(36).slice(2,9); }
 
-const state = {
+var state = {
   settings: { eventName: "", sectors: ["A","B","C","D","E"] },
-  athletes: [], // {id,name,club}
-  days: [],     // {id,name,date, draw:{athId:{sector,peg}}, results:{athId:{weight,biggest,count,status}}}
+  athletes: [],
+  days: [],
   activeDayId: null,
-  teamRosters: {} // club -> έως 5 athleteIds (κλειστή 5άδα)
+  teamRosters: {} // club -> έως 5 ids
 };
 
 function save(){ localStorage.setItem("alieia_sector_positions_state", JSON.stringify(state)); }
-function load(){ const raw=localStorage.getItem("alieia_sector_positions_state"); if(!raw) return false; Object.assign(state, JSON.parse(raw)); return true; }
+function load(){ var raw=localStorage.getItem("alieia_sector_positions_state"); if(!raw) return false; var obj=JSON.parse(raw); for(var k in obj){ state[k]=obj[k]; } return true; }
 
 /* ---------- Router (σελίδες) ---------- */
 function showPage(pid){
-  document.querySelectorAll(".page").forEach(p=> p.style.display = (p.id===pid? "block":"none"));
-  document.querySelectorAll("nav button").forEach(b=> b.classList.toggle("active", b.dataset.page===pid));
+  var pages=document.querySelectorAll(".page");
+  for(var i=0;i<pages.length;i++){ pages[i].style.display = (pages[i].id===pid? "block":"none"); }
+  var btns=document.querySelectorAll("nav button");
+  for(var j=0;j<btns.length;j++){ btns[j].classList.toggle("active", btns[j].getAttribute("data-page")===pid); }
   renderAll();
   location.hash = pid;
 }
-document.getElementById("topNav").addEventListener("click", (e)=>{
-  if(e.target.tagName==="BUTTON"){ showPage(e.target.dataset.page); }
+$("topNav").addEventListener("click", function(e){
+  if(e.target.tagName==="BUTTON"){ showPage(e.target.getAttribute("data-page")); }
 });
-window.addEventListener("load", ()=>{
-  const initial = location.hash?.slice(1) || "p-participants";
+window.addEventListener("load", function(){
+  var initial = getInitialPage();
   showPage(initial);
 });
 
 /* ---------- Utils ---------- */
-function escapeHtml(s){ return String(s??"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;"); }
-function shuffle(arr){ for(let i=arr.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [arr[i],arr[j]]=[arr[j]] } return arr; }
-function activeDay(){ return state.days.find(d=>d.id===state.activeDayId) || null; }
-function sanitize(s){ return String(s).replaceAll(/[^a-zA-Z0-9\-_. ]+/g,"").replaceAll(" ","_"); }
+function shuffle(arr){ for(var i=arr.length-1;i>0;i--){ var j=Math.floor(Math.random()*(i+1)); var t=arr[i]; arr[i]=arr[j]; arr[j]=t; } return arr; }
+function activeDay(){ for (var i=0;i<state.days.length;i++){ if(state.days[i].id===state.activeDayId) return state.days[i]; } return null; }
 function ceilDiv(a,b){ return Math.ceil(a/b); }
 
 /* ---------- Participants UI ---------- */
 function renderAthletes(){
-  const wrap = $("athletesTableWrap");
+  var wrap = $("athletesTableWrap");
   if(!wrap) return;
-  if(state.athletes.length===0){ wrap.innerHTML = `<p class="muted">Δεν υπάρχουν συμμετέχοντες ακόμη.</p>`; return; }
-  let html = `<table><thead><tr><th>#</th><th>Συμμετέχων</th><th>Σύλλογος</th><th></th></tr></thead><tbody>`;
-  state.athletes.forEach((a,i)=>{
-    html += `<tr><td>${i+1}</td><td>${escapeHtml(a.name)}</td><td>${escapeHtml(a.club)}</td>
-      <td><button class="danger" data-del="${a.id}">Διαγραφή</button></td></tr>`;
+  if(state.athletes.length===0){ wrap.innerHTML = '<p class="muted">Δεν υπάρχουν συμμετέχοντες ακόμη.</p>'; return; }
+  var html = '<table><thead><tr><th>#</th><th>Συμμετέχων</th><th>Σύλλογος</th><th></th></tr></thead><tbody>';
+  state.athletes.forEach(function(a,i){
+    html += '<tr><td>'+ (i+1) +'</td><td>'+ safeEscapeHtml(a.name) +'</td><td>'+ safeEscapeHtml(a.club||"") +'</td>'
+          + '<td><button class="danger" data-del="'+ a.id +'">Διαγραφή</button></td></tr>';
   });
-  html += `</tbody></table>`;
+  html += '</tbody></table>';
   wrap.innerHTML = html;
-  wrap.querySelectorAll("[data-del]").forEach(btn=>{
-    btn.onclick=()=>{
-      const id=btn.getAttribute("data-del");
-      state.athletes=state.athletes.filter(x=>x.id!==id);
-      state.days.forEach(d=>{ delete d.draw[id]; delete d.results[id]; });
-      Object.keys(state.teamRosters).forEach(c=>{ state.teamRosters[c]=(state.teamRosters[c]||[]).filter(x=>x!==id); });
+  var delBtns = wrap.querySelectorAll("[data-del]");
+  delBtns.forEach(function(btn){
+    btn.onclick=function(){
+      var id=btn.getAttribute("data-del");
+      state.athletes=state.athletes.filter(function(x){ return x.id!==id; });
+      state.days.forEach(function(d){ if(d.draw) delete d.draw[id]; if(d.results) delete d.results[id]; });
+      Object.keys(state.teamRosters).forEach(function(c){ state.teamRosters[c]=(state.teamRosters[c]||[]).filter(function(x){ return x!==id; }); });
       renderAll(); save();
     };
   });
 }
 function renderTeams(){
-  const wrap = $("teamsWrap"); if(!wrap) return; wrap.innerHTML="";
-  const byClub = new Map();
-  state.athletes.forEach(a=>{ const c=a.club?.trim()||"-"; if(!byClub.has(c)) byClub.set(c,[]); byClub.get(c).push(a); });
-  byClub.forEach(arr=>arr.sort((a,b)=> a.name.localeCompare(b.name,'el')));
-  byClub.forEach((members,club)=>{
-    const box=document.createElement("div"); box.className="card";
-    const chosen=new Set((state.teamRosters[club]||[]).slice(0,5));
-    box.innerHTML = `<h3 style="margin:0 0 8px 0">${escapeHtml(club)} — Κλειστή 5άδα <span class="muted small">(${chosen.size}/5)</span></h3>`;
-    members.forEach(m=>{
-      const id=`cb_${club}_${m.id}`;
-      const row=document.createElement("div"); row.className="row"; row.style.alignItems="center";
-      const chk=document.createElement("input"); chk.type="checkbox"; chk.id=id; chk.checked=chosen.has(m.id); chk.style.width="auto";
-      chk.onchange=()=>{
-        const list=new Set(state.teamRosters[club]||[]);
+  var wrap = $("teamsWrap"); if(!wrap) return; wrap.innerHTML="";
+  var byClub = new Map();
+  state.athletes.forEach(function(a){ var c=(a.club||"-").trim(); if(!byClub.has(c)) byClub.set(c,[]); byClub.get(c).push(a); });
+  byClub.forEach(function(arr){ arr.sort(function(a,b){ return a.name.localeCompare(b.name,'el'); }); });
+  byClub.forEach(function(members,club){
+    var box=document.createElement("div"); box.className="card";
+    var chosen=new Set((state.teamRosters[club]||[]).slice(0,5));
+    box.innerHTML = '<h3 style="margin:0 0 8px 0">'+ safeEscapeHtml(club) +' — Κλειστή 5άδα <span class="muted small">('+ chosen.size +'/5)</span></h3>';
+    members.forEach(function(m){
+      var id='cb_'+club+'_'+m.id;
+      var row=document.createElement("div"); row.className="row"; row.style.alignItems="center";
+      var chk=document.createElement("input"); chk.type="checkbox"; chk.id=id; chk.checked=chosen.has(m.id); chk.style.width="auto";
+      chk.onchange=function(){
+        var list=new Set(state.teamRosters[club]||[]);
         if(chk.checked){ if(list.size>=5){ chk.checked=false; alert("Κλειστή πεντάδα: μέχρι 5 άτομα."); return; } list.add(m.id); }
         else list.delete(m.id);
-        state.teamRosters[club]=[...list]; renderTeams(); save();
+        state.teamRosters[club]=Array.from(list); renderTeams(); save();
       };
-      const lab=document.createElement("label"); lab.htmlFor=id; lab.textContent=m.name;
+      var lab=document.createElement("label"); lab.htmlFor=id; lab.textContent=m.name;
       row.appendChild(chk); row.appendChild(lab); box.appendChild(row);
     });
     wrap.appendChild(box);
@@ -263,78 +279,83 @@ function renderTeams(){
 
 /* ---------- Days & Draw UI ---------- */
 function renderDaysTabs(){
-  const wrap = $("daysTabs"); if(!wrap) return; wrap.innerHTML="";
-  if(state.days.length===0){ wrap.innerHTML = `<span class="muted small">Καμία ημέρα ακόμη.</span>`; return; }
-  state.days.forEach((d,i)=>{
-    const b=document.createElement("button"); b.className="pill"; b.textContent=`${d.name||("Ημέρα "+(i+1))}${d.date? " ("+d.date+")":""}`;
+  var wrap = $("daysTabs"); if(!wrap) return; wrap.innerHTML="";
+  if(state.days.length===0){ wrap.innerHTML = '<span class="muted small">Καμία ημέρα ακόμη.</span>'; return; }
+  state.days.forEach(function(d,i){
+    var b=document.createElement("button"); b.className="pill"; b.textContent=(d.name||( "Ημέρα "+(i+1))) + (d.date? " ("+d.date+")": "");
     if(d.id===state.activeDayId) b.style.borderColor="#22c55e";
-    b.onclick=()=>{ state.activeDayId=d.id; renderAll(); save(); };
+    b.onclick=function(){ state.activeDayId=d.id; renderAll(); save(); };
     wrap.appendChild(b);
   });
 }
 function renderPegTags(){
-  const wrap=$("pegTags"); if(!wrap) return; wrap.innerHTML="";
-  const N=state.athletes.length, per=ceilDiv(N,5);
-  state.settings.sectors.forEach((sec,idx)=>{
-    const left = Math.max(0, N - per*idx);
-    const count = Math.min(per, left);
-    const span=document.createElement("span"); span.className="pill";
-    span.textContent = `${sec}: ${count} θέσεις` + ((idx===4 && (N%5)!==0) ? " (Τεχνικός)" : "");
+  var wrap=$("pegTags"); if(!wrap) return; wrap.innerHTML="";
+  var N=state.athletes.length, per=ceilDiv(N,5);
+  state.settings.sectors.forEach(function(sec,idx){
+    var left = Math.max(0, N - per*idx);
+    var count = Math.min(per, left);
+    var span=document.createElement("span"); span.className="pill";
+    span.textContent = sec + ': ' + count + ' θέσεις' + ((idx===4 && (N%5)!==0) ? " (Τεχνικός)" : "");
     wrap.appendChild(span);
   });
-  const note=document.createElement("div"); note.className="small muted";
+  var note=document.createElement("div"); note.className="small muted";
   note.textContent="Οι αριθμοί θέσεων 1..N ανακατεύονται τυχαία σε κάθε κλήρωση.";
   wrap.appendChild(note);
 }
 function renderDraw(){
-  const d=activeDay(); const wrap=$("drawTableWrap"); if(!wrap) return;
-  if(!d){ wrap.innerHTML=`<p class="muted">Επίλεξε/πρόσθεσε ημέρα.</p>`; return; }
-  if(Object.keys(d.draw).length===0){ wrap.innerHTML=`<p class="muted">Καμία κλήρωση για την «${escapeHtml(d.name)}».</p>`; return; }
-  const rows = state.athletes.map(a=>({a, dd:d.draw[a.id]})).sort((x,y)=>{
-    const xs=x.dd?x.dd.sector:""; const ys=y.dd?y.dd.sector:"";
-    if(xs===ys){ const xp=x.dd?x.dd.peg:999999; const yp=y.dd?y.dd.peg:999999; return xp-yp;} return xs.localeCompare(ys);
+  var d=activeDay(); var wrap=$("drawTableWrap"); if(!wrap) return;
+  if(!d){ wrap.innerHTML='<p class="muted">Επίλεξε/πρόσθεσε ημέρα.</p>'; return; }
+  if(!d.draw || Object.keys(d.draw).length===0){ wrap.innerHTML='<p class="muted">Καμία κλήρωση για την «'+ safeEscapeHtml(d.name) +'».</p>'; return; }
+  var rows = state.athletes.map(function(a){ return {a:a, dd:d.draw[a.id]}; }).sort(function(x,y){
+    var xs=x.dd?x.dd.sector:""; var ys=y.dd?y.dd.sector:"";
+    if(xs===ys){ var xp=x.dd?x.dd.peg:999999; var yp=y.dd?y.dd.peg:999999; return xp-yp;} return xs.localeCompare(ys);
   });
-  let html = `<div class="small muted">${escapeHtml(state.settings.eventName||"")} — ${escapeHtml((activeDay()?.name)||"")} ${escapeHtml((activeDay()?.date)||"")}</div>
-  <table><thead><tr><th>#</th><th>Συμμετέχων</th><th>Σύλλογος</th><th>Τομέας</th><th>Θέση</th></tr></thead><tbody>`;
-  rows.forEach((r,i)=>{ html += `<tr><td>${i+1}</td><td>${escapeHtml(r.a.name)}</td><td>${escapeHtml(r.a.club)}</td><td>${r.dd? r.dd.sector:"-"}</td><td>${r.dd? r.dd.peg:"-"}</td></tr>`; });
-  html += `</tbody></table>`; wrap.innerHTML=html;
+  var ad = activeDay();
+  var html = '<div class="small muted">'+ safeEscapeHtml(state.settings.eventName||"") +' — '+ safeEscapeHtml(ad?ad.name:"") +' '+ safeEscapeHtml(ad?ad.date:"") +'</div>'
+  + '<table><thead><tr><th>#</th><th>Συμμετέχων</th><th>Σύλλογος</th><th>Τομέας</th><th>Θέση</th></tr></thead><tbody>';
+  rows.forEach(function(r,i){ html += '<tr><td>'+ (i+1) +'</td><td>'+ safeEscapeHtml(r.a.name) +'</td><td>'+ safeEscapeHtml(r.a.club||"") +'</td><td>'+ (r.dd? r.dd.sector:"-") +'</td><td>'+ (r.dd? r.dd.peg:"-") +'</td></tr>'; });
+  html += '</tbody></table>'; wrap.innerHTML=html;
 }
 
 /* ---------- Entry UI ---------- */
 function renderResults(){
-  const d=activeDay(); const wrap=$("resultsTableWrap"); if(!wrap) return;
-  if(!d){ wrap.innerHTML=`<p class="muted">Επίλεξε/πρόσθεσε ημέρα.</p>`; return; }
-  let html = `<table><thead><tr>
-    <th>#</th><th>Συμμετέχων</th><th>Σύλλογος</th><th>Τομέας</th><th>Θέση</th>
-    <th>Βάρος (g)</th><th>Πλήθος</th><th>Μεγ. ψάρι (g)</th><th>Κατάσταση</th>
-  </tr></thead><tbody>`;
-  const rows = state.athletes.map(a=>({a, dd: d.draw[a.id]})).sort((x,y)=>{
-    const xs=x.dd?x.dd.sector:""; const ys=y.dd?y.dd.sector:""; if(xs===ys){ const xp=x.dd?x.dd.peg:999999; const yp=y.dd?y.dd.peg:999999; return xp-yp;} return xs.localeCompare(ys);
+  var d=activeDay(); var wrap=$("resultsTableWrap"); if(!wrap) return;
+  if(!d){ wrap.innerHTML='<p class="muted">Επίλεξε/πρόσθεσε ημέρα.</p>'; return; }
+  var html = '<table><thead><tr>'
+    + '<th>#</th><th>Συμμετέχων</th><th>Σύλλογος</th><th>Τομέας</th><th>Θέση</th>'
+    + '<th>Βάρος (g)</th><th>Πλήθος</th><th>Μεγ. ψάρι (g)</th><th>Κατάσταση</th>'
+    + '</tr></thead><tbody>';
+
+  var rows = state.athletes.map(function(a){ return {a:a, dd: (d.draw ? d.draw[a.id] : undefined)}; });
+  rows.sort(function(x,y){
+    var xs=x.dd?x.dd.sector:""; var ys=y.dd?y.dd.sector:"";
+    if(xs===ys){ var xp=x.dd?x.dd.peg:999999; var yp=y.dd?y.dd.peg:999999; return xp-yp;} return xs.localeCompare(ys);
   });
-  rows.forEach((r,i)=>{
-    const res = d.results[r.a.id] || {weight:0,biggest:0,count:0,status:"OK"};
-    html += `<tr>
-      <td>${i+1}</td><td>${escapeHtml(r.a.name)}</td><td>${escapeHtml(r.a.club||"")}</td>
-      <td>${r.dd? r.dd.sector:"-"}</td><td>${r.dd? r.dd.peg:"-"}</td>
-      <td><input type="number" min="0" data-id="${r.a.id}" data-f="weight" value="${res.weight}"></td>
-      <td><input type="number" min="0" data-id="${r.a.id}" data-f="count" value="${res.count}"></td>
-      <td><input type="number" min="0" data-id="${r.a.id}" data-f="biggest" value="${res.biggest}"></td>
-      <td>
-        <select data-id="${r.a.id}" data-f="status">
-          <option value="OK" ${res.status==="OK"?"selected":""}>OK</option>
-          <option value="DQ" ${res.status==="DQ"?"selected":""}>DQ</option>
-          <option value="NS" ${res.status==="NS"?"selected":""}>NS</option>
-        </select>
-      </td>
-    </tr>`;
+
+  rows.forEach(function(r,i){
+    var res = (d.results && d.results[r.a.id]) ? d.results[r.a.id] : {weight:0,biggest:0,count:0,status:"OK"};
+    html += '<tr>'
+      + '<td>'+ (i+1) +'</td><td>'+ safeEscapeHtml(r.a.name) +'</td><td>'+ safeEscapeHtml(r.a.club||"") +'</td>'
+      + '<td>'+ (r.dd? r.dd.sector:"-") +'</td><td>'+ (r.dd? r.dd.peg:"-") +'</td>'
+      + '<td><input type="number" min="0" data-id="'+ r.a.id +'" data-f="weight" value="'+ (res.weight||0) +'"></td>'
+      + '<td><input type="number" min="0" data-id="'+ r.a.id +'" data-f="count" value="'+ (res.count||0) +'"></td>'
+      + '<td><input type="number" min="0" data-id="'+ r.a.id +'" data-f="biggest" value="'+ (res.biggest||0) +'"></td>'
+      + '<td><select data-id="'+ r.a.id +'" data-f="status">'
+        + '<option value="OK" '+ (res.status==="OK"?"selected":"") +'>OK</option>'
+        + '<option value="DQ" '+ (res.status==="DQ"?"selected":"") +'>DQ</option>'
+        + '<option value="NS" '+ (res.status==="NS"?"selected":"") +'>NS</option>'
+      + '</select></td>'
+    + '</tr>';
   });
-  html += `</tbody></table>`;
+  html += '</tbody></table>';
   wrap.innerHTML=html;
-  wrap.querySelectorAll("input,select").forEach(el=>{
-    el.oninput=()=>{
-      const id=el.getAttribute("data-id"), f=el.getAttribute("data-f"); const d2=activeDay(); if(!d2) return;
+
+  wrap.querySelectorAll("input,select").forEach(function(el){
+    el.oninput=function(){
+      var id=el.getAttribute("data-id"), f=el.getAttribute("data-f"); var d2=activeDay(); if(!d2) return;
+      if(!d2.results) d2.results={};
       if(!d2.results[id]) d2.results[id]={weight:0,biggest:0,count:0,status:"OK"};
-      let v=el.value; if(["weight","biggest","count"].includes(f)) v=Number(v||0);
+      var v=el.value; if(f==="weight"||f==="biggest"||f==="count") v=Number(v||0);
       d2.results[id][f]=v; save();
     };
   });
@@ -342,184 +363,181 @@ function renderResults(){
 
 /* ---------- Buttons & Settings ---------- */
 function bindCommonButtons(){
-  const b1=$("saveStateBtn"), b2=$("loadStateBtn"), b3=$("resetBtn");
-  if(b1){ b1.onclick=()=>{ save(); alert("Αποθηκεύτηκε στον browser."); }; }
-  if(b2){ b2.onclick=()=>{ if(!load()) alert("Δεν βρέθηκαν δεδομένα."); renderAll(); }; }
-  if(b3){ b3.onclick=()=>{ if(confirm("Σίγουρα; Θα χαθούν όλα.")){ localStorage.removeItem("alieia_sector_positions_state"); location.reload(); } }; }
+  var b1=$("saveStateBtn"), b2=$("loadStateBtn"), b3=$("resetBtn");
+  if(b1){ b1.onclick=function(){ save(); alert("Αποθηκεύτηκε στον browser."); }; }
+  if(b2){ b2.onclick=function(){ if(!load()) alert("Δεν βρέθηκαν δεδομένα."); renderAll(); }; }
+  if(b3){ b3.onclick=function(){ if(confirm("Σίγουρα; Θα χαθούν όλα.")){ localStorage.removeItem("alieia_sector_positions_state"); location.reload(); } }; }
 }
 function bindParticipants(){
-  const add=$("addAthleteBtn"), bulk=$("addBulkBtn"), excelBtn=$("excelBtn"), excelInp=$("excelInput");
-  if(add){ add.onclick=()=>{ const nm=$("athleteName").value.trim(); if(!nm) return; const club=$("club").value.trim(); state.athletes.push({id:uid(),name:nm,club}); $("athleteName").value=""; $("club").value=""; renderAll(); save(); }; }
-  if(bulk){ bulk.onclick=()=>{ const txt=prompt("Επικόλλησε λίστα (Όνομα[, Σύλλογος]) — μία ανά γραμμή",""); if(!txt) return; txt.split("\n").map(x=>x.trim()).filter(Boolean).forEach(line=>{ const [name,club]=line.split(","); state.athletes.push({id:uid(),name:name?.trim()||"",club:club?.trim()||""}); }); renderAll(); save(); }; }
-  if(excelBtn && excelInp){ excelBtn.onclick=()=>excelInp.click(); excelInp.onchange=excelImport; }
+  var add=$("addAthleteBtn"), bulk=$("addBulkBtn"), excelBtn=$("excelBtn"), excelInp=$("excelInput");
+  if(add){ add.onclick=function(){ var nm=$("athleteName").value.trim(); if(!nm) return; var club=$("club").value.trim(); state.athletes.push({id:uid(),name:nm,club:club}); $("athleteName").value=""; $("club").value=""; renderAll(); save(); }; }
+  if(bulk){ bulk.onclick=function(){ var txt=prompt("Επικόλλησε λίστα (Όνομα[, Σύλλογος]) — μία ανά γραμμή",""); if(!txt) return; txt.split("\n").map(function(x){return x.trim();}).filter(Boolean).forEach(function(line){ var parts=line.split(","); var name=parts[0]||""; var club=(parts[1]||""); state.athletes.push({id:uid(),name:name.trim(),club:club.trim()}); }); renderAll(); save(); }; }
+  if(excelBtn && excelInp){ excelBtn.onclick=function(){ excelInp.click(); }; excelInp.onchange=excelImport; }
 }
 function bindDays(){
-  const add=$("addDayBtn"); if(add){ add.onclick=()=>{ const name=$("dayName").value.trim()||`Ημέρα ${state.days.length+1}`; const date=$("dayDate").value||""; const id=uid(); state.days.push({id,name,date,draw:{},results:{}}); state.activeDayId=id; $("dayName").value=""; $("dayDate").value=""; renderAll(); save(); }; }
+  var add=$("addDayBtn"); if(add){ add.onclick=function(){ var name=$("dayName").value.trim()||('Ημέρα '+(state.days.length+1)); var date=$("dayDate").value||""; var id=uid(); state.days.push({id:id,name:name,date:date,draw:{},results:{}}); state.activeDayId=id; $("dayName").value=""; $("dayDate").value=""; renderAll(); save(); }; }
 }
 function bindDrawButtons(){
-  const dBtn=$("drawBtn"), prBtn=$("printDrawBtn"), clrBtn=$("clearDrawBtn");
-  if(dBtn){ dBtn.onclick=()=>{ const d=activeDay(); if(!d){ alert("Επίλεξε/πρόσθεσε ημέρα."); return; } doDrawForDay(d); renderDraw(); renderResults(); renderScores(); save(); }; }
-  if(prBtn){ prBtn.onclick=()=>{ document.body.classList.add('print-draw'); window.print(); setTimeout(()=>document.body.classList.remove('print-draw'),0); }; }
-  if(clrBtn){ clrBtn.onclick=()=>{ const d=activeDay(); if(!d) return; d.draw={}; renderDraw(); renderResults(); renderScores(); save(); }; }
+  var dBtn=$("drawBtn"), prBtn=$("printDrawBtn"), clrBtn=$("clearDrawBtn");
+  if(dBtn){ dBtn.onclick=function(){ var d=activeDay(); if(!d){ alert("Επίλεξε/πρόσθεσε ημέρα."); return; } doDrawForDay(d); renderDraw(); renderResults(); renderScores(); save(); }; }
+  if(prBtn){ prBtn.onclick=function(){ document.body.classList.add('print-draw'); window.print(); setTimeout(function(){document.body.classList.remove('print-draw');},0); }; }
+  if(clrBtn){ clrBtn.onclick=function(){ var d=activeDay(); if(!d) return; d.draw={}; renderDraw(); renderResults(); renderScores(); save(); }; }
 }
 function bindScoresButtons(){
-  const recalc=$("recalcBtn"), printBtn=$("printBtn"), csvBtn=$("exportCsvBtn"), pdfBtn=$("pdfBtn");
-  if(recalc){ recalc.onclick=()=> renderScores(); }
-  if(printBtn){ printBtn.onclick=()=> window.print(); }
-  if(csvBtn){ csvBtn.onclick=()=> exportCSV(); }
-  if(pdfBtn){ pdfBtn.onclick=()=> exportPDF(); }
+  var recalc=$("recalcBtn"), printBtn=$("printBtn"), csvBtn=$("exportCsvBtn"), pdfBtn=$("pdfBtn");
+  if(recalc){ recalc.onclick=function(){ renderScores(); }; }
+  if(printBtn){ printBtn.onclick=function(){ window.print(); }; }
+  if(csvBtn){ csvBtn.onclick=function(){ exportCSV(); }; }
+  if(pdfBtn){ pdfBtn.onclick=function(){ exportPDF(); }; }
 }
 function bindSettings(){
-  const ev=$("eventName"); if(ev){ ev.oninput=e=>{ state.settings.eventName=e.target.value; save(); }; }
+  var ev=$("eventName"); if(ev){ ev.oninput=function(e){ state.settings.eventName=e.target.value; save(); }; }
 }
 
 /* ---------- Scoring (ανά τομέα) ---------- */
 function sectorOrder(){ return state.settings.sectors; } // ["A","B","C","D","E"]
 
-// Επιστρέφει: {ordered, placeMap, sectorMaxMap}
 function scoreDay(dayId){
-  const d = state.days.find(x=>x.id===dayId); if(!d) return {ordered:[], placeMap:new Map(), sectorMaxMap:new Map()};
-  const N = state.athletes.length, per = ceilDiv(N,5);
+  var d = state.days.find(function(x){ return x.id===dayId; }); if(!d) return {ordered:[], placeMap:new Map(), sectorMaxMap:new Map()};
+  var N = state.athletes.length, per = ceilDiv(N,5);
 
-  const bySec = new Map(sectorOrder().map(s=>[s,[]]));
-  state.athletes.forEach(a=>{
-    const dd=d.draw[a.id]; const r=d.results[a.id]||{weight:0,biggest:0,count:0,status:"OK"};
+  var bySec = new Map(); sectorOrder().forEach(function(s){ bySec.set(s,[]); });
+  state.athletes.forEach(function(a){
+    var dd=d.draw[a.id]; var r=(d.results && d.results[a.id]) || {weight:0,biggest:0,count:0,status:"OK"};
     if(!dd || r.status!=="OK") return;
     bySec.get(dd.sector).push({id:a.id,name:a.name,club:a.club,sector:dd.sector,peg:dd.peg,weight:r.weight||0,biggest:r.biggest||0,count:r.count||0});
   });
 
-  // Τεχνικός Ε: δανείζεται ουραγούς D για να φτάσει per (μόνο εσωτερική κατάταξη Ε)
-  const E = bySec.get("E"), D = bySec.get("D");
+  // Τεχνικός Ε: δανείζεται ουραγούς D
+  var E = bySec.get("E"), D = bySec.get("D");
   if(E && D && E.length < per){
-    const need = per - E.length;
-    const donors = [...D].sort((a,b)=>a.peg-b.peg).slice(-need).map(x=> ({...x, borrowedFrom:"D"}));
-    E.push(...donors);
+    var need = per - E.length;
+    var donors = D.slice().sort(function(a,b){return a.peg-b.peg;}).slice(-need).map(function(x){ var y={}; for(var k in x){ y[k]=x[k]; } y.borrowedFrom="D"; return y; });
+    Array.prototype.push.apply(E, donors);
   }
 
-  const placeMap = new Map();
-  const sectorMaxMap = new Map();
+  var placeMap = new Map();
+  var sectorMaxMap = new Map();
 
-  sectorOrder().forEach(sec=>{
-    const arr = bySec.get(sec);
-    arr.sort((a,b)=> (b.weight-a.weight) || (b.count-a.count) || (b.biggest-a.biggest) || a.id.localeCompare(b.id));
+  sectorOrder().forEach(function(sec){
+    var arr = bySec.get(sec);
+    arr.sort(function(a,b){ return (b.weight-a.weight) || (b.count-a.count) || (b.biggest-a.biggest) || a.id.localeCompare(b.id); });
     sectorMaxMap.set(sec, Math.max(arr.length, per));
-    let place=1;
-    arr.forEach(row=>{
-      if(sec!=="E" || !row.borrowedFrom){ placeMap.set(row.id, {sec, place}); }
+    var place=1;
+    arr.forEach(function(row){
+      if(sec!=="E" || !row.borrowedFrom){ placeMap.set(row.id, {sec:sec, place:place}); }
       place++;
     });
   });
 
-  const ordered = [];
-  sectorOrder().forEach(sec=>{
-    (bySec.get(sec)||[]).forEach(r=>{
-      const pl = placeMap.get(r.id);
-      ordered.push({...r, place: (pl && pl.sec===sec)? pl.place : (r.borrowedFrom? "(δαν.)" : null)});
+  var ordered = [];
+  sectorOrder().forEach(function(sec){
+    (bySec.get(sec)||[]).forEach(function(r){
+      var pl = placeMap.get(r.id);
+      ordered.push(Object.assign({}, r, { place: (pl && pl.sec===sec)? pl.place : (r.borrowedFrom? "(δαν.)" : null)}));
     });
   });
-  return {ordered, placeMap, sectorMaxMap};
+  return {ordered:ordered, placeMap:placeMap, sectorMaxMap:sectorMaxMap};
 }
 
-// Συνολικό Ατομικό (άθροισμα θέσεων τομέα ανά ημέρα)
 function scoreAggregate(){
-  const acc=new Map(); state.athletes.forEach(a=> acc.set(a.id,{id:a.id,name:a.name,club:a.club, total_place:0, days:0, total_weight:0, total_count:0, best_biggest:0}));
-  state.days.forEach(d=>{
-    const sc = scoreDay(d.id);
-    state.athletes.forEach(a=>{
-      const dd = d.draw[a.id]; const sec = dd? dd.sector : null;
-      const r = d.results[a.id];
-      const secMax = sec? (sc.sectorMaxMap.get(sec)||0) : 0;
-      const entry = acc.get(a.id);
-      const pl = sc.placeMap.get(a.id);
-      const place = (pl && pl.sec===sec)? pl.place : (secMax>0? (secMax+1) : 0); // NS/DQ/χωρίς κλήρωση → MAX+1 του τομέα
+  var acc=new Map(); state.athletes.forEach(function(a){ acc.set(a.id,{id:a.id,name:a.name,club:a.club, total_place:0, days:0, total_weight:0, total_count:0, best_biggest:0}); });
+  state.days.forEach(function(d){
+    var sc = scoreDay(d.id);
+    state.athletes.forEach(function(a){
+      var dd = d.draw[a.id]; var sec = dd? dd.sector : null;
+      var r = d.results ? d.results[a.id] : null;
+      var secMax = sec? (sc.sectorMaxMap.get(sec)||0) : 0;
+      var entry = acc.get(a.id);
+      var pl = sc.placeMap.get(a.id);
+      var place = (pl && pl.sec===sec)? pl.place : (secMax>0? (secMax+1) : 0);
       if(sec){ entry.total_place += place; entry.days += 1; }
       if(r && r.status==="OK"){ entry.total_weight += (r.weight||0); entry.total_count += (r.count||0); entry.best_biggest = Math.max(entry.best_biggest, (r.biggest||0)); }
     });
   });
-  const rows=[...acc.values()];
-  rows.sort((a,b)=> (a.total_place-b.total_place) || (b.total_weight-a.total_weight) || (b.total_count-a.total_count) || (b.best_biggest-a.best_biggest) || a.name.localeCompare(b.name,'el'));
+  var rows=Array.from(acc.values());
+  rows.sort(function(a,b){ return (a.total_place-b.total_place) || (b.total_weight-a.total_weight) || (b.total_count-a.total_count) || (b.best_biggest-a.best_biggest) || a.name.localeCompare(b.name,'el'); });
   return rows;
 }
 
-/* ---------- Ομαδικό (κλειστή 5άδα) από θέσεις τομέα ---------- */
-function getClubs(){ return [...new Set(state.athletes.map(a=>a.club?.trim()||"-"))]; }
-function teamRoster(club){ return (state.teamRosters[club]||[]).filter(id=> state.athletes.find(a=>a.id===id)).slice(0,5); }
+/* ---------- Ομαδικό (κλειστή 5άδα) ---------- */
+function getClubs(){ return Array.from(new Set(state.athletes.map(function(a){return (a.club||"-").trim();}))); }
+function teamRoster(club){ return (state.teamRosters[club]||[]).filter(function(id){ return state.athletes.find(function(a){return a.id===id;}); }).slice(0,5); }
 function teamScoreDay(dayId){
-  const d = state.days.find(x=>x.id===dayId); if(!d) return [];
-  const sc = scoreDay(dayId);
-  const teams=[];
-  getClubs().forEach(club=>{
-    const roster = teamRoster(club); if(roster.length===0) return;
-    let sum=0, w=0; const names=[];
-    roster.forEach(id=>{
-      const a=state.athletes.find(x=>x.id===id); names.push(a? a.name:"—");
-      const dd=d.draw[id]; const sec=dd? dd.sector:null;
-      const secMax = sec? (sc.sectorMaxMap.get(sec)||0) : 0;
-      const pl = sc.placeMap.get(id);
-      const place = (pl && pl.sec===sec)? pl.place : (secMax+1);
+  var d = state.days.find(function(x){return x.id===dayId;}); if(!d) return [];
+  var sc = scoreDay(dayId);
+  var teams=[];
+  getClubs().forEach(function(club){
+    var roster = teamRoster(club); if(roster.length===0) return;
+    var sum=0, w=0; var names=[];
+    roster.forEach(function(id){
+      var a=state.athletes.find(function(x){return x.id===id;}); names.push(a? a.name:"—");
+      var dd=d.draw[id]; var sec=dd? dd.sector:null;
+      var secMax = sec? (sc.sectorMaxMap.get(sec)||0) : 0;
+      var pl = sc.placeMap.get(id);
+      var place = (pl && pl.sec===sec)? pl.place : (secMax+1);
       sum += place;
-      const rr=d.results[id]; if(rr && rr.status==="OK") w += (rr.weight||0);
+      var rr=d.results ? d.results[id] : null; if(rr && rr.status==="OK") w += (rr.weight||0);
     });
-    teams.push({club, team_place_sum:sum, team_weight:w, members:names});
+    teams.push({club:club, team_place_sum:sum, team_weight:w, members:names});
   });
-  teams.sort((a,b)=> (a.team_place_sum-b.team_place_sum) || (b.team_weight-a.team_weight) || a.club.localeCompare(b.club,'el'));
+  teams.sort(function(a,b){ return (a.team_place_sum-b.team_place_sum) || (b.team_weight-a.team_weight) || a.club.localeCompare(b.club,'el'); });
   return teams;
 }
 function teamScoreAggregate(){
-  const acc=new Map(); getClubs().forEach(c=> acc.set(c,{club:c, place_sum:0, weight_sum:0, days:0}));
-  state.days.forEach(d=>{
-    const t = teamScoreDay(d.id);
-    const byClub=new Map(t.map(x=>[x.club,x]));
-    acc.forEach((v,c)=>{ const x=byClub.get(c); if(x){ v.place_sum+=x.team_place_sum; v.weight_sum+=x.team_weight; v.days+=1; } });
+  var acc=new Map(); getClubs().forEach(function(c){ acc.set(c,{club:c, place_sum:0, weight_sum:0, days:0}); });
+  state.days.forEach(function(d){
+    var t = teamScoreDay(d.id);
+    var byClub=new Map(t.map(function(x){return [x.club,x];}));
+    acc.forEach(function(v,c){ var x=byClub.get(c); if(x){ v.place_sum+=x.team_place_sum; v.weight_sum+=x.team_weight; v.days+=1; } });
   });
-  const rows=[...acc.values()];
-  rows.sort((a,b)=> (a.place_sum-b.place_sum) || (b.weight_sum-a.weight_sum) || a.club.localeCompare(b.club,'el'));
+  var rows=Array.from(acc.values());
+  rows.sort(function(a,b){ return (a.place_sum-b.place_sum) || (b.weight_sum-a.weight_sum) || a.club.localeCompare(b.club,'el'); });
   return rows;
 }
 
-/* ---------- Κλήρωση (κλειστή 5άδα σε διαφορετικούς τομείς) + shuffled pegs ---------- */
+/* ---------- Κλήρωση ---------- */
 function doDrawForDay(d){
-  const sectors = state.settings.sectors; // A..E
-  const N = state.athletes.length;
-  const per = ceilDiv(N,5); // στόχος/τομέα
-  const buckets = new Map(sectors.map(s=>[s, new Array(per).fill(null)]));
-  const clubInSector = new Map(sectors.map(s=>[s, new Set()])); // για κλειστή 5άδα
-  const sectorCap = new Map(sectors.map(s=>[s,0]));
-  const rosterSet = new Set(); Object.values(state.teamRosters).forEach(arr=> arr.slice(0,5).forEach(id=> rosterSet.add(id)));
-  const rosterAthletes = state.athletes.filter(a=> rosterSet.has(a.id));
-  const otherAthletes = state.athletes.filter(a=> !rosterSet.has(a.id));
+  var sectors = state.settings.sectors;
+  var N = state.athletes.length;
+  var per = ceilDiv(N,5);
+  var buckets = new Map(sectors.map(function(s){ return [s, new Array(per).fill(null)]; }));
+  var clubInSector = new Map(sectors.map(function(s){ return [s, new Set()]; }));
+  var sectorCap = new Map(sectors.map(function(s){ return [s,0]; }));
+  var rosterSet = new Set(); Object.values(state.teamRosters).forEach(function(arr){ (arr||[]).slice(0,5).forEach(function(id){ rosterSet.add(id); }); });
+  var rosterAthletes = state.athletes.filter(function(a){ return rosterSet.has(a.id); });
+  var otherAthletes = state.athletes.filter(function(a){ return !rosterSet.has(a.id); });
   shuffle(rosterAthletes); shuffle(otherAthletes);
 
-  let violations=0;
+  var violations=0;
   function placeIn(sec, id, club){
-    const arr=buckets.get(sec); const idx=arr.findIndex(x=>x===null); if(idx===-1) return false;
+    var arr=buckets.get(sec); var idx=arr.findIndex(function(x){return x===null;}); if(idx===-1) return false;
     arr[idx]=id; sectorCap.set(sec, sectorCap.get(sec)+1); return true;
   }
-  // Πρώτα η κλειστή 5άδα, αποφεύγοντας ίδιο σύλλογο στον ίδιο τομέα
-  rosterAthletes.forEach(a=>{
-    const c=a.club?.trim()||"-";
-    const choices = sectors.filter(s=> !clubInSector.get(s).has(c) && sectorCap.get(s)<per);
-    const fallback = sectors.filter(s=> sectorCap.get(s)<per);
-    const pickFrom = choices.length? choices : fallback;
-    const sec = pickFrom.sort((s1,s2)=> sectorCap.get(s1)-sectorCap.get(s2))[0];
+  rosterAthletes.forEach(function(a){
+    var c=(a.club||"-").trim();
+    var choices = sectors.filter(function(s){ return !clubInSector.get(s).has(c) && sectorCap.get(s)<per; });
+    var fallback = sectors.filter(function(s){ return sectorCap.get(s)<per; });
+    var pickFrom = choices.length? choices : fallback;
+    var sorted = pickFrom.slice().sort(function(s1,s2){ return sectorCap.get(s1)-sectorCap.get(s2); });
+    var sec = sorted[0];
     if(!choices.length) violations++;
     placeIn(sec, a.id, c); clubInSector.get(sec).add(c);
   });
-  // Μετά οι υπόλοιποι για ισοκατανομή
-  otherAthletes.forEach(a=>{
-    const sec = sectors.sort((s1,s2)=> sectorCap.get(s1)-sectorCap.get(s2))[0];
-    placeIn(sec, a.id, a.club?.trim()||"-");
+  otherAthletes.forEach(function(a){
+    var sorted = sectors.slice().sort(function(s1,s2){ return sectorCap.get(s1)-sectorCap.get(s2); });
+    var sec = sorted[0];
+    placeIn(sec, a.id, (a.club||"-").trim());
   });
 
-  // Ανάθεση θέσεων 1..N ανακατεμένες (τυχαία)
-  const shuffledPegNumbers = Array.from({length:N}, (_,i)=>i+1);
+  var shuffledPegNumbers = Array.from({length:N}, function(_,i){ return i+1; });
   shuffle(shuffledPegNumbers);
 
   d.draw = {};
-  let pegIdx = 0;
-  sectors.forEach(sec=>{
-    const list=(buckets.get(sec)||[]).filter(Boolean);
-    list.forEach((athId)=>{
+  var pegIdx = 0;
+  sectors.forEach(function(sec){
+    var list=(buckets.get(sec)||[]).filter(Boolean);
+    list.forEach(function(athId){
       if(pegIdx < shuffledPegNumbers.length){
         d.draw[athId] = {sector:sec, peg: shuffledPegNumbers[pegIdx++]};
       }
@@ -527,142 +545,141 @@ function doDrawForDay(d){
   });
 
   if(violations>0){
-    alert(`Προειδοποίηση: Δεν ήταν εφικτός ο πλήρης διαχωρισμός μελών κλειστής 5άδας σε διαφορετικούς τομείς (${violations} περιπτώσεις).`);
+    alert("Προειδοποίηση: Δεν ήταν εφικτός ο πλήρης διαχωρισμός μελών κλειστής 5άδας σε διαφορετικούς τομείς ("+violations+" περιπτώσεις).");
   }
 }
 
 /* ---------- Βαθμολογίες & Αναφορές (UI) ---------- */
-function tab(label,cb){ const b=document.createElement("button"); b.className="pill"; b.textContent=label; b.onclick=cb; return b; }
+function tab(label,cb){ var b=document.createElement("button"); b.className="pill"; b.textContent=label; b.onclick=cb; return b; }
 function makeTable(rows,title,headers){
-  let html = `<h3 style="margin:6px 0">${escapeHtml(title)}</h3><table><thead><tr>${headers.map(h=>`<th>${escapeHtml(h)}</th>`).join("")}</tr></thead><tbody>`;
-  rows.forEach(r=>{ html += `<tr>${r.map(c=>`<td>${escapeHtml(String(c))}</td>`).join("")}</tr>`); });
-  html += `</tbody></table>`; return html;
+  var html = '<h3 style="margin:6px 0">'+ safeEscapeHtml(title) +'</h3><table><thead><tr>'+ headers.map(function(h){return '<th>'+ safeEscapeHtml(h) +'</th>';}).join("") +'</tr></thead><tbody>';
+  rows.forEach(function(r){ html += '<tr>'+ r.map(function(c){return '<td>'+ safeEscapeHtml(String(c)) +'</td>';}).join("") +'</tr>'; });
+  html += '</tbody></table>'; return html;
 }
 function renderScores(){
-  const tabs=$("scoreTabs"), area=$("scoreTables"); if(!tabs || !area) return; tabs.innerHTML=""; area.innerHTML="";
-  const d=activeDay();
+  var tabs=$("scoreTabs"), area=$("scoreTables"); if(!tabs || !area) return; tabs.innerHTML=""; area.innerHTML="";
+  var d=activeDay();
 
-  // 1) Ημέρα (Ατομικό ανά Τομέα)
   if(d){
-    const btnDay = tab(`Ημέρα: ${d.name} — Ατομικό ανά Τομέα`, ()=>{
-      const day = scoreDay(d.id);
-      const rs = day.ordered.map((r,i)=>[i+1,r.sector,r.name,r.club||"",r.weight,r.count,r.biggest,r.place]);
-      area.innerHTML = makeTable(rs,`Κατάταξη Ημέρας ανά Τομέα — Βάρος → Πλήθος → Μεγ. ψάρι`, ["#","Τομέας","Συμμετέχων","Σύλλογος","Βάρος(g)","Πλήθος","Μεγ.Ψάρι(g)","Θέση Τομέα"]);
+    var btnDay = tab('Ημέρα: '+d.name+' — Ατομικό ανά Τομέα', function(){
+      var day = scoreDay(d.id);
+      var rs = day.ordered.map(function(r,i){ return [i+1,r.sector,r.name,r.club||"",r.weight,r.count,r.biggest,r.place]; });
+      area.innerHTML = makeTable(rs,'Κατάταξη Ημέρας ανά Τομέα — Βάρος → Πλήθος → Μεγ. ψάρι', ["#","Τομέας","Συμμετέχων","Σύλλογος","Βάρος(g)","Πλήθος","Μεγ.Ψάρι(g)","Θέση Τομέα"]);
     }); tabs.appendChild(btnDay); btnDay.click();
   }
 
-  // 2) Συνολικό Πρωτάθλημα (Ατομικό — από θέσεις τομέα)
-  const btnAgg = tab("Σύνολο Πρωταθλήματος (Ατομικό — από θέσεις τομέα)", ()=>{
-    const rows = scoreAggregate().map((r,i)=>[i+1,r.name,r.club||"",r.days,r.total_place,r.total_weight,r.total_count,r.best_biggest]);
+  var btnAgg = tab("Σύνολο Πρωταθλήματος (Ατομικό — από θέσεις τομέα)", function(){
+    var rows = scoreAggregate().map(function(r,i){ return [i+1,r.name,r.club||"",r.days,r.total_place,r.total_weight,r.total_count,r.best_biggest]; });
     area.innerHTML = makeTable(rows,"Συνολική Ατομική Κατάταξη (άθροισμα θέσεων τομέα ανά ημέρα)",["#","Συμμετέχων","Σύλλογος","Ημέρες","Σύνολο Θέσεων","Συν. Βάρος","Συν. Πλήθος","Καλ. Μεγ.Ψάρι"]);
   }); tabs.appendChild(btnAgg);
 
-  // 3) Ομαδικό — Ημέρας (από θέσεις τομέα)
   if(d){
-    const btnTeamDay = tab(`Ημέρα: ${d.name} — Ομαδικό 5άδας`, ()=>{
-      const rows = teamScoreDay(d.id).map((t,i)=>[i+1,t.club,t.members.join(", "),t.team_place_sum,t.team_weight]);
-      area.innerHTML = makeTable(rows,`Ομαδικό Ημέρας (κλειστή 5άδα — άθροισμα θέσεων τομέα)`,["#","Σύλλογος","5άδα","Άθροισμα Θέσεων","Συνολικό Βάρος"]);
+    var btnTeamDay = tab('Ημέρα: '+d.name+' — Ομαδικό 5άδας', function(){
+      var rows = teamScoreDay(d.id).map(function(t,i){ return [i+1,t.club,t.members.join(", "),t.team_place_sum,t.team_weight]; });
+      area.innerHTML = makeTable(rows,'Ομαδικό Ημέρας (κλειστή 5άδα — άθροισμα θέσεων τομέα)',["#","Σύλλογος","5άδα","Άθροισμα Θέσεων","Συνολικό Βάρος"]);
     }); tabs.appendChild(btnTeamDay);
   }
 
-  // 4) Ομαδικό — Πρωτάθλημα
-  const btnTeamAgg = tab("Σύνολο Πρωταθλήματος (Ομαδικό 5άδας)", ()=>{
-    const rows = teamScoreAggregate().map((t,i)=>[i+1,t.club,t.place_sum,t.weight_sum,t.days]);
+  var btnTeamAgg = tab("Σύνολο Πρωταθλήματος (Ομαδικό 5άδας)", function(){
+    var rows = teamScoreAggregate().map(function(t,i){ return [i+1,t.club,t.place_sum,t.weight_sum,t.days]; });
     area.innerHTML = makeTable(rows,"Ομαδικό Πρωταθλήματος (άθροισμα θέσεων τομέα ανά ημέρα)",["#","Σύλλογος","Σύνολο Θέσεων","Συνολικό Βάρος","Ημέρες"]);
   }); tabs.appendChild(btnTeamAgg);
 }
 
 /* ---------- Import/Export ---------- */
 function excelImport(ev){
-  const file=ev.target.files[0]; if(!file) return;
-  const name=file.name.toLowerCase(); const reader=new FileReader();
+  var file=ev.target.files[0]; if(!file) return;
+  var name=file.name.toLowerCase(); var reader=new FileReader();
   if(name.endsWith(".csv")){
-    reader.onload=()=>{
-      const lines=reader.result.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
-      lines.forEach(line=>{ const [nm,club] = line.split(","); if(nm) state.athletes.push({id:uid(),name:nm.trim(),club:(club||"").trim()}); });
+    reader.onload=function(){
+      var lines=reader.result.split(/\r?\n/).map(function(x){return x.trim();}).filter(Boolean);
+      lines.forEach(function(line){ var parts=line.split(","); var nm=parts[0]; var club=parts[1]||""; if(nm) state.athletes.push({id:uid(),name:nm.trim(),club:club.trim()}); });
       renderAll(); save(); ev.target.value="";
     }; reader.readAsText(file,"utf-8");
   } else {
-    reader.onload=(e)=>{
-      const data=new Uint8Array(e.target.result); const wb=XLSX.read(data,{type:"array"});
-      const ws=wb.Sheets[wb.SheetNames[0]]; const arr=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
-      arr.forEach((row,idx)=>{ if(idx===0 && String(row[0]).toLowerCase().includes("ονομα")) return;
-        const nm=String(row[0]||"").trim(); if(!nm) return; const club=String(row[1]||"").trim();
-        state.athletes.push({id:uid(), name:nm, club});
+    reader.onload=function(e){
+      var data=new Uint8Array(e.target.result); var wb=XLSX.read(data,{type:"array"});
+      var ws=wb.Sheets[wb.SheetNames[0]]; var arr=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
+      arr.forEach(function(row,idx){ if(idx===0 && String(row[0]).toLowerCase().indexOf("ονομα")>-1) return;
+        var nm=String(row[0]||"").trim(); if(!nm) return; var club=String(row[1]||"").trim();
+        state.athletes.push({id:uid(), name:nm, club:club});
       });
       renderAll(); save(); ev.target.value="";
     }; reader.readAsArrayBuffer(file);
   }
 }
+function csvEscape(val){ return '"'+ String(val).replace(/"/g,'""') +'"'; }
 function exportCSV(){
-  const agg = scoreAggregate().map((r,i)=>[i+1,r.name,r.club||"",r.days,r.total_place,r.total_weight,r.total_count,r.best_biggest]);
-  const headAgg = ["#","Όνομα","Σύλλογος","Ημέρες","Σύνολο Θέσεων","Συνολικό Βάρος","Συνολικό Πλήθος","Καλύτερο Μεγ.Ψάρι"];
-  const csvAgg = [headAgg, ...agg].map(r=>r.map(x=>`"${String(x).replaceAll('"','""')}"`).join(",")).join("\n");
+  var agg = scoreAggregate().map(function(r,i){ return [i+1,r.name,r.club||"",r.days,r.total_place,r.total_weight,r.total_count,r.best_biggest]; });
+  var headAgg = ["#","Όνομα","Σύλλογος","Ημέρες","Σύνολο Θέσεων","Συνολικό Βάρος","Συνολικό Πλήθος","Καλύτερο Μεγ.Ψάρι"];
+  var csvAgg = [headAgg].concat(agg).map(function(r){return r.map(csvEscape).join(",");}).join("\n");
 
-  const teamsAgg = teamScoreAggregate().map((t,i)=>[i+1,t.club,t.place_sum,t.weight_sum,t.days]);
-  const headTA = ["#","Σύλλογος","Σύνολο Θέσεων","Συνολικό Βάρος","Ημέρες"];
-  const csvTA = [headTA, ...teamsAgg].map(r=>r.map(x=>`"${String(x).replaceAll('"','""')}"`).join(",")).join("\n");
+  var teamsAgg = teamScoreAggregate().map(function(t,i){ return [i+1,t.club,t.place_sum,t.weight_sum,t.days]; });
+  var headTA = ["#","Σύλλογος","Σύνολο Θέσεων","Συνολικό Βάρος","Ημέρες"];
+  var csvTA = [headTA].concat(teamsAgg).map(function(r){return r.map(csvEscape).join(",");}).join("\n");
 
-  const d=activeDay(); let csvDay="", csvTeamDay="";
+  var d=activeDay(); var csvDay="", csvTeamDay="";
   if(d){
-    const day=scoreDay(d.id);
-    const dayRows = day.ordered.map((r,i)=>[i+1,r.sector,r.name,r.club||"",d.name,d.date||"",r.weight,r.count,r.biggest,r.place,r.peg]);
-    const headDay = ["#","Τομέας","Όνομα","Σύλλογος","Ημέρα","Ημερομηνία","Βάρος(g)","Πλήθος","Μεγ.Ψάρι(g)","Θέση Τομέα","Θέση"];
-    csvDay = [headDay, ...dayRows].map(r=>r.map(x=>`"${String(x).replaceAll('"','""')}"`).join(",")).join("\n");
+    var day=scoreDay(d.id);
+    var dayRows = day.ordered.map(function(r,i){ return [i+1,r.sector,r.name,r.club||"",d.name,d.date||"",r.weight,r.count,r.biggest,r.place,r.peg]; });
+    var headDay = ["#","Τομέας","Όνομα","Σύλλογος","Ημέρα","Ημερομηνία","Βάρος(g)","Πλήθος","Μεγ.Ψάρι(g)","Θέση Τομέα","Θέση"];
+    csvDay = [headDay].concat(dayRows).map(function(r){return r.map(csvEscape).join(",");}).join("\n");
 
-    const tRows = teamScoreDay(d.id).map((t,i)=>[i+1,t.club,t.members.join(" | "),t.team_place_sum,t.team_weight]);
-    const headTD = ["#","Σύλλογος","5άδα","Άθροισμα Θέσεων","Συνολικό Βάρος"];
-    csvTeamDay = [headTD, ...tRows].map(r=>r.map(x=>`"${String(x).replaceAll('"','""')}"`).join(",")).join("\n");
+    var tRows = teamScoreDay(d.id).map(function(t,i){ return [i+1,t.club,t.members.join(" | "),t.team_place_sum,t.team_weight]; });
+    var headTD = ["#","Σύλλογος","5άδα","Άθροισμα Θέσεων","Συνολικό Βάρος"];
+    csvTeamDay = [headTD].concat(tRows).map(function(r){return r.map(csvEscape).join(",");}).join("\n");
   }
 
-  const files = [
+  var files = [
     {name:"atomiko-synolo-thesi_sector.csv", data:csvAgg},
-    {name:"omadiko-synolo-thesi_sector.csv", data:csvTA},
-    ...(d? [{name:`atomiko-${sanitize(d.name)}_sector.csv`, data:csvDay},
-            {name:`omadiko-${sanitize(d.name)}_sector.csv`, data:csvTeamDay}]:[])
+    {name:"omadiko-synolo-thesi_sector.csv", data:csvTA}
   ];
-  files.forEach(p=>{
-    const blob=new Blob([p.data],{type:"text/csv;charset=utf-8"}); const url=URL.createObjectURL(blob);
-    const a=document.createElement("a"); a.href=url; a.download=p.name; a.click(); URL.revokeObjectURL(url);
+  if(d){
+    files.push({name:"atomiko-"+safeSanitize(d.name)+"_sector.csv", data:csvDay});
+    files.push({name:"omadiko-"+safeSanitize(d.name)+"_sector.csv", data:csvTeamDay});
+  }
+  files.forEach(function(p){
+    var blob=new Blob([p.data],{type:"text/csv;charset=utf-8"}); var url=URL.createObjectURL(blob);
+    var a=document.createElement("a"); a.href=url; a.download=p.name; a.click(); URL.revokeObjectURL(url);
   });
 }
-async function exportPDF(){
-  const { jsPDF } = window.jspdf || {}; if(!jsPDF || !("autoTable" in (window.jspdf?.jsPDF?.prototype||{}))){ alert("Λείπει jsPDF/autoTable."); return; }
-  const doc=new jsPDF({unit:"pt",format:"a4"}), margin=36; const title=state.settings.eventName||"Αγώνας Αθλητικής Αλιείας";
+function exportPDF(){
+  if(!(window.jspdf && window.jspdf.jsPDF && window.jspdf.jsPDF.prototype && ("autoTable" in window.jspdf.jsPDF.prototype))){
+    alert("Λείπει jsPDF/autoTable."); return;
+  }
+  var jsPDF = window.jspdf.jsPDF;
+  var doc=new jsPDF({unit:"pt",format:"a4"}), margin=36; var title=state.settings.eventName||"Αγώνας Αθλητικής Αλιείας";
   doc.setFont("helvetica","bold"); doc.setFontSize(16); doc.text(title, margin, 44);
 
-  // Ομαδικό σύνολο
   doc.setFont("helvetica","normal"); doc.setFontSize(12); doc.text("Ομαδικό Πρωταθλήματος (άθροισμα θέσεων τομέα 5άδας)", margin, 70);
-  const teamsAgg = teamScoreAggregate().map((t,i)=>[i+1,t.club,t.place_sum,t.weight_sum,t.days]);
+  var teamsAgg = teamScoreAggregate().map(function(t,i){ return [i+1,t.club,t.place_sum,t.weight_sum,t.days]; });
   doc.autoTable({startY:80, margin:{left:margin,right:margin}, head:[["#","Σύλλογος","Σύνολο Θέσεων","Συνολικό Βάρος","Ημέρες"]], body:teamsAgg});
-  let y = doc.lastAutoTable.finalY + 24;
+  var y = doc.lastAutoTable.finalY + 24;
 
-  // Ατομικό σύνολο
   doc.text("Ατομικό Πρωταθλήματος (άθροισμα θέσεων τομέα ανά ημέρα)", margin, y);
-  const agg = scoreAggregate().map((r,i)=>[i+1,r.name,r.club||"",r.days,r.total_place,r.total_weight,r.total_count,r.best_biggest]);
+  var agg = scoreAggregate().map(function(r,i){ return [i+1,r.name,r.club||"",r.days,r.total_place,r.total_weight,r.total_count,r.best_biggest]; });
   doc.autoTable({startY:y+10, margin:{left:margin,right:margin}, head:[["#","Συμμετέχων","Σύλλογος","Ημέρες","Σύνολο Θέσεων","Συν. Βάρος","Συν. Πλήθος","Καλ. Μεγ.Ψάρι"]], body:agg});
   y = doc.lastAutoTable.finalY + 24;
 
-  // Κάθε ημέρα — Ανά Τομέα & Ομαδικό ημέρας
-  for(const d of state.days){
+  state.days.forEach(function(d){
     if(y>760){ doc.addPage(); y=margin; }
-    doc.setFont("helvetica","bold"); doc.text(`Ημέρα: ${d.name}${d.date? " ("+d.date+")":""}`, margin, y);
-    const day = scoreDay(d.id);
-    const ind = day.ordered.map((r,i)=>[i+1,r.sector,r.name,r.club||"",r.weight,r.count,r.biggest,r.place,r.peg]);
+    doc.setFont("helvetica","bold"); doc.text("Ημέρα: "+d.name+(d.date? " ("+d.date+")":""), margin, y);
+    var day = scoreDay(d.id);
+    var ind = day.ordered.map(function(r,i){ return [i+1,r.sector,r.name,r.club||"",r.weight,r.count,r.biggest,r.place,r.peg]; });
     doc.autoTable({startY:y+10, margin:{left:margin,right:margin},
       head:[["#","Τομέας","Συμμετέχων","Σύλλογος","Βάρος(g)","Πλήθος","Μεγ.Ψάρι(g)","Θέση Τομέα","Θέση"]], body:ind});
     y = doc.lastAutoTable.finalY + 10;
 
-    const tRows = teamScoreDay(d.id).map((t,i)=>[i+1,t.club,t.members.join(", "),t.team_place_sum,t.team_weight]);
+    var tRows = teamScoreDay(d.id).map(function(t,i){ return [i+1,t.club,t.members.join(", "),t.team_place_sum,t.team_weight]; });
     doc.autoTable({startY:y, margin:{left:margin,right:margin}, head:[["#","Σύλλογος","5άδα","Άθροισμα Θέσεων","Συνολικό Βάρος"]], body:tRows});
     y = doc.lastAutoTable.finalY + 20;
-  }
-  doc.save(`Anafora-${sanitize(title)}.pdf`);
+  });
+  doc.save("Anafora-"+safeSanitize(title)+".pdf");
 }
 
 /* ---------- Init & Render ---------- */
 function renderAll(){
-  const ev=$("eventName"); if(ev) ev.value = state.settings.eventName||"";
+  var ev=$("eventName"); if(ev) ev.value = state.settings.eventName||"";
   renderAthletes();
   renderTeams();
   renderDaysTabs();
@@ -673,14 +690,12 @@ function renderAll(){
 }
 function init(){
   load();
-  if(state.days.length===0){ const id=uid(); state.days.push({id,name:"Ημέρα 1",date:"",draw:{},results:{}}); state.activeDayId=id; }
+  if(state.days.length===0){ var id=uid(); state.days.push({id:id,name:"Ημέρα 1",date:"",draw:{},results:{}}); state.activeDayId=id; }
   else if(!state.activeDayId){ state.activeDayId=state.days[0].id; }
   bindCommonButtons(); bindParticipants(); bindDays(); bindDrawButtons(); bindScoresButtons(); bindSettings();
   renderAll();
 }
-init();
+try { init(); } catch (e) { console.error(e); alert("Υπήρξε σφάλμα στο script. Δες την κονσόλα για λεπτομέρειες."); }
 </script>
 </body>
-</html>
-
 </html>
