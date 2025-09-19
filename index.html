@@ -156,7 +156,7 @@
       </div>
       <div class="small muted" style="margin-top:6px">
         Ημερήσια ατομική: θέση <b>ανά τομέα</b>. Συνολικό πρωτάθλημα (ατομικό): άθροισμα αυτών των θέσεων.
-        Θέσεις κλήρωσης 1..N ανακατεύονται τυχαία.
+        Θέσεις κλήρωσης μοιράζονται σε ranges ανά τομέα (π.χ. Α:1–P, Β:P+1–2P, ...).
       </div>
       <div class="row" style="justify-content:flex-end;margin-top:8px">
         <button class="ghost" id="saveStateBtn">💾 Αποθήκευση</button>
@@ -180,7 +180,7 @@ function safeEscapeHtml(s){
 }
 function safeSanitize(s){
   s = String(s == null ? "" : s);
-  return s.replace(/[^a-zA-Z0-9\\-_. ]+/g,"").replace(/ /g,"_");
+  return s.replace(/[^a-zA-Z0-9\-_. ]+/g,"").replace(/ /g,"_");
 }
 function getInitialPage(){
   return (window.location && window.location.hash) ? window.location.hash.slice(1) : "p-participants";
@@ -292,14 +292,15 @@ function renderPegTags(){
   var wrap=$("pegTags"); if(!wrap) return; wrap.innerHTML="";
   var N=state.athletes.length, per=ceilDiv(N,5);
   state.settings.sectors.forEach(function(sec,idx){
-    var left = Math.max(0, N - per*idx);
-    var count = Math.min(per, left);
+    var start = idx*per + 1;
+    var end   = (idx+1)*per;
     var span=document.createElement("span"); span.className="pill";
-    span.textContent = sec + ': ' + count + ' θέσεις' + ((idx===4 && (N%5)!==0) ? " (Τεχνικός)" : "");
+    var techNote = (idx===4 && (N%5)!==0) ? " (Τεχνικός)" : "";
+    span.textContent = sec + ': θέσεις ' + start + '–' + end + techNote;
     wrap.appendChild(span);
   });
   var note=document.createElement("div"); note.className="small muted";
-  note.textContent="Οι αριθμοί θέσεων 1..N ανακατεύονται τυχαία σε κάθε κλήρωση.";
+  note.textContent="Οι θέσεις κάθε τομέα είναι συνεχόμενες και ανακατεύονται τοπικά. Η κλειστή 5άδα δεν πέφτει στον ίδιο τομέα. Προτιμάται να μην είναι ίδιος σύλλογος στον ίδιο τομέα.";
   wrap.appendChild(note);
 }
 function renderDraw(){
@@ -496,24 +497,40 @@ function teamScoreAggregate(){
   return rows;
 }
 
-/* ---------- Κλήρωση ---------- */
+/* ---------- Κλήρωση με συνοχή θέσεων ανά τομέα ---------- */
 function doDrawForDay(d){
-  var sectors = state.settings.sectors;
+  var sectors = state.settings.sectors; // ["A","B","C","D","E"]
   var N = state.athletes.length;
-  var per = ceilDiv(N,5);
+  var per = ceilDiv(N,5); // μέγεθος range θέσεων ανά τομέα
+
+  // Κάδοι τοποθέτησης: κάθε τομέας έχει έως 'per' slots
   var buckets = new Map(sectors.map(function(s){ return [s, new Array(per).fill(null)]; }));
-  var clubInSector = new Map(sectors.map(function(s){ return [s, new Set()]; }));
+  var clubInSector = new Map(sectors.map(function(s){ return [s, new Set()]; })); // για αποφυγή ίδιου συλλόγου
   var sectorCap = new Map(sectors.map(function(s){ return [s,0]; }));
-  var rosterSet = new Set(); Object.values(state.teamRosters).forEach(function(arr){ (arr||[]).slice(0,5).forEach(function(id){ rosterSet.add(id); }); });
+
+  // Σύνολο μελών κλειστής 5άδας (απαγορεύεται ίδιος τομέας)
+  var rosterSet = new Set();
+  Object.values(state.teamRosters).forEach(function(arr){
+    (arr||[]).slice(0,5).forEach(function(id){ rosterSet.add(id); });
+  });
+
   var rosterAthletes = state.athletes.filter(function(a){ return rosterSet.has(a.id); });
-  var otherAthletes = state.athletes.filter(function(a){ return !rosterSet.has(a.id); });
+  var otherAthletes  = state.athletes.filter(function(a){ return !rosterSet.has(a.id); });
   shuffle(rosterAthletes); shuffle(otherAthletes);
 
   var violations=0;
+
   function placeIn(sec, id, club){
-    var arr=buckets.get(sec); var idx=arr.findIndex(function(x){return x===null;}); if(idx===-1) return false;
-    arr[idx]=id; sectorCap.set(sec, sectorCap.get(sec)+1); return true;
+    var arr=buckets.get(sec);
+    var idx=arr.findIndex(function(x){return x===null;});
+    if(idx===-1) return false; // γεμάτος τομέας
+    arr[idx]=id;
+    sectorCap.set(sec, sectorCap.get(sec)+1);
+    if(club) clubInSector.get(sec).add(club);
+    return true;
   }
+
+  // 1) Μέλη κλειστής 5άδας: αυστηρά διαφορετικοί τομείς & αποφυγή ίδιου συλλόγου στον ίδιο τομέα
   rosterAthletes.forEach(function(a){
     var c=(a.club||"-").trim();
     var choices = sectors.filter(function(s){ return !clubInSector.get(s).has(c) && sectorCap.get(s)<per; });
@@ -522,25 +539,30 @@ function doDrawForDay(d){
     var sorted = pickFrom.slice().sort(function(s1,s2){ return sectorCap.get(s1)-sectorCap.get(s2); });
     var sec = sorted[0];
     if(!choices.length) violations++;
-    placeIn(sec, a.id, c); clubInSector.get(sec).add(c);
+    placeIn(sec, a.id, c);
   });
+
+  // 2) Υπόλοιποι: κατά προτίμηση όχι ίδιος σύλλογος στον ίδιο τομέα, αλλιώς στον πιο άδειο
   otherAthletes.forEach(function(a){
-    var sorted = sectors.slice().sort(function(s1,s2){ return sectorCap.get(s1)-sectorCap.get(s2); });
+    var c=(a.club||"-").trim();
+    var preferred = sectors.filter(function(s){ return !clubInSector.get(s).has(c) && sectorCap.get(s)<per; });
+    var pickFrom = preferred.length? preferred : sectors.filter(function(s){ return sectorCap.get(s)<per; });
+    var sorted = pickFrom.slice().sort(function(s1,s2){ return sectorCap.get(s1)-sectorCap.get(s2); });
     var sec = sorted[0];
-    placeIn(sec, a.id, (a.club||"-").trim());
+    placeIn(sec, a.id, c);
   });
 
-  var shuffledPegNumbers = Array.from({length:N}, function(_,i){ return i+1; });
-  shuffle(shuffledPegNumbers);
-
+  // 3) Ανάθεση ΘΕΣΕΩΝ με συνοχή ανά τομέα: range [idx*per+1 .. (idx+1)*per], ανακάτεμα τοπικά
   d.draw = {};
-  var pegIdx = 0;
-  sectors.forEach(function(sec){
-    var list=(buckets.get(sec)||[]).filter(Boolean);
-    list.forEach(function(athId){
-      if(pegIdx < shuffledPegNumbers.length){
-        d.draw[athId] = {sector:sec, peg: shuffledPegNumbers[pegIdx++]};
-      }
+  sectors.forEach(function(sec, idx){
+    var list=(buckets.get(sec)||[]).filter(Boolean);          // αθλητές στον τομέα
+    var start = idx*per + 1;
+    var end   = (idx+1)*per;
+    var localPegs = [];
+    for(var k=start;k<=end;k++) localPegs.push(k);
+    shuffle(localPegs);
+    list.forEach(function(athId, i){
+      d.draw[athId] = {sector:sec, peg: localPegs[i]};
     });
   });
 
