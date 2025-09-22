@@ -445,7 +445,7 @@ function bindAll(){
   var ev=$("eventName"); if(ev){ ev.oninput=function(e){ state.settings.eventName=e.target.value; save(); }; }
 }
 
-/* ==== Scoring (ίδιο όπως πριν) ==== */
+/* ==== Scoring ==== */
 function sectorOrder(){ return state.settings.sectors; }
 function scoreDay(dayId){
   var d = state.days.find(function(x){ return x.id===dayId; }); if(!d) return {ordered:[], placeMap:new Map(), sectorMaxMap:new Map()};
@@ -621,7 +621,6 @@ function excelImport(ev){
     reader.onload=function(e){
       var data=new Uint8Array(e.target.result); var wb=XLSX.read(data,{type:"array"});
       var ws=wb.Sheets[wb.SheetNames[0]]; var arr=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
-      // αν υπάρχει header γραμμή, προσπαθούμε να εντοπίσουμε στήλες
       var mapIdx = { name:0, club:1, regNo:2, sponsor:3 };
       if(arr.length && arr[0]){
         var hdr = arr[0].map(function(x){ return String(x||"").toLowerCase(); });
@@ -633,7 +632,6 @@ function excelImport(ev){
         if(clubIdx>=0) mapIdx.club=clubIdx;
         if(regIdx>=0)  mapIdx.regNo=regIdx;
         if(spoIdx>=0)  mapIdx.sponsor=spoIdx;
-        // αν βρέθηκε header, ξεκινάμε από 2η γραμμή
         if(nameIdx>=0 || clubIdx>=0 || regIdx>=0 || spoIdx>=0) arr = arr.slice(1);
       }
       arr.forEach(function(row){
@@ -683,14 +681,14 @@ function exportXLSX(){
     var dayRows = day.ordered
       .filter(function(r){ return typeof r.place === "number"; })
       .sort(function(a,b){
-        // μέσα σε ίδια θέση: Βάρος ↓ → Πλήθος ↓ → Μεγ. ψάρι ↓
         return (a.place - b.place) ||
                (b.weight - a.weight) || (b.count - a.count) || (b.biggest - a.biggest) ||
                a.sector.localeCompare(b.sector) || a.name.localeCompare(b.name,'el');
       })
       .map(function(r,i){
         var a = state.athletes.find(function(x){return x.id===r.id;})||{};
-        return { "#": i+1, "Θέση Τομέα": r.place, "Τομέας": r.sector, "Όνομα": r.name,
+        // ΑΛΛΑΓΗ: "Β. ΠΟΙΝΗΣ" αντί "Θέση Τομέα"
+        return { "#": i+1, "Β. ΠΟΙΝΗΣ": r.place, "Τομέας": r.sector, "Όνομα": r.name,
                  "Σύλλογος": r.club||"", "Αρ. Μητρώου": a.regNo||"", "Χορηγός": a.sponsor||"",
                  "Βάρος(g)": r.weight, "Πλήθος": r.count, "Μεγ.Ψάρι(g)": r.biggest, "Θέση": r.peg };
       });
@@ -767,6 +765,7 @@ function renderScores(){
       var rowsSorted = day.ordered
         .filter(function(r){ return typeof r.place === "number"; })
         .sort(function(a,b){
+          // ίδια θέση: Βάρος ↓ → Πλήθος ↓ → Μεγ. ψάρι ↓
           return (a.place - b.place) ||
                  (b.weight - a.weight) || (b.count - a.count) || (b.biggest - a.biggest) ||
                  a.sector.localeCompare(b.sector) || a.name.localeCompare(b.name,'el');
@@ -780,7 +779,8 @@ function renderScores(){
       area.innerHTML = makeTable(
         rs,
         'Κατάταξη Ημέρας (1οι→2οι→…) — (tie-break: Βάρος → Πλήθος → Μεγ. ψάρι)',
-        ["#","Θέση Τομέα","Τομέας","Συμμετέχων","Σύλλογος","Αρ. Μητρώου","Χορηγός","Βάρος(g)","Πλήθος","Μεγ.Ψάρι(g)","Θέση"]
+        // ΑΛΛΑΓΗ header: «Β. ΠΟΙΝΗΣ»
+        ["#","Β. ΠΟΙΝΗΣ","Τομέας","Συμμετέχων","Σύλλογος","Αρ. Μητρώου","Χορηγός","Βάρος(g)","Πλήθος","Μεγ.Ψάρι(g)","Θέση"]
       );
     }); tabs.appendChild(btnDay); btnDay.click();
   }
@@ -814,6 +814,9 @@ function renderAll(){
   renderResults();
   renderScores();
 }
+
+/* ==== Bind ==== */
+bindAll();
 </script>
 </body>
 </html>
